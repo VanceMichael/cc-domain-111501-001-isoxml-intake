@@ -14,6 +14,18 @@
 
 完整性至少区分取得文件与解释关系两个层次；已隔离的未知字段不能被称作已解释。notes为现有人工诊断入口，可扩展结构，但信息应包含具体资料位置和未决原因。文件级原始证据由Repository.retain保留。legacy的人工预览入口继续可用；managed模式负责结构化接入。
 
+## 本profile的实现语义
+
+managed模式（`collect({mode:'managed'})`，见`src/managed.mjs`）按以下规则落地上述约定：
+
+- 解释链路为纯函数（`src/isoxml.mjs`）：`parseTaskFile`提取TSK/TIM/DLV并保留每个DLV的文件内位置；`parseDeviceFile`建立DVC内DET→DOR→DPD→DVP对象号映射；`resolveReadings`把读数绑定到唯一设备元素，再按同DDI匹配DPD与DVP，显示值为`(raw+offset)*scale`并按decimals取整。每一步写入`basis`追溯链，原始整数始终保留在`readings[].rawValue`。
+- 记录的存储键是结构身份`task|DET对象号|DDI`，业务id`task:DET设计名称:DPD设计名称`仅在设计名称被真实解析后存在；未解释记录使用`pending:`前缀id且`value`为null，任何路径都不会写入0或默认单位。
+- 未解释分两类：资料缺口为`pending`（设备元素找不到、DOR缺失、DVP未解析、文档404/503/格式错误），资料互相矛盾为`conflict`（元素不支持该DDI、候选DPD不唯一、同一对象号出现在多个DVC）。两者都附具体资料位置并进入notes。
+- 每次采集从已留存原始字节重新解释。同一结构键的解释发生变化时，`pending→resolved`记为`supplement`（迟到补件），其余变化记为`revision`（矛盾/新版本），历史解释、旧版字节摘要与原始值都保留在`revisions`和文档`versions`中，可核对但不覆盖。
+- 条件请求带`If-None-Match`，304不重取正文；ETag与实算摘要不一致时留note。目录不可达、文件503/404均不删除既有记录，只更新可恢复状态；当前目录不再包含的旧记录加`flag`而不是删除。
+- 两层完成度：`documentComplete`要求目录中每份文件都已取得且无失败状态；`interpretationComplete`要求无pending、无conflict、无解析问题。`complete`为两者交集，HTTP 200或预览成功不参与判定。
+- 进程终止恢复依赖持久化的`evidence/raw`、文档索引`documents`、游标`managed:catalog`与`managed:latest`；重新打开仓库后重跑采集即可补齐未提交的解释，不依赖固定样本。`crashAfterRetain`是仅供验收的终止注入缝。
+
 ## 验证矩阵
 
 1. 按样本跨文件完成 任务与机具元素关联 与 日志列定义绑定，不以读取目录或预览摘要代替。
